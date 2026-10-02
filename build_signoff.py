@@ -20,6 +20,9 @@ import re
 import sys
 from datetime import datetime, timedelta
 
+MAPPING_DIR = "mapping"
+DEFAULT_MAPPING = os.path.join(MAPPING_DIR, "Signoff_Mapping.xlsx")
+
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment
 
@@ -42,10 +45,10 @@ def load_mapping(mapping_path: str) -> list:
     ws = wb[target]
     rows = []
     for r in range(2, ws.max_row + 1):
-        kw = (ws.cell(row=r, column=2).value or "").strip()
-        all_p = (ws.cell(row=r, column=3).value or "").strip()
-        part_p = (ws.cell(row=r, column=4).value or "").strip()
-        recert_p = (ws.cell(row=r, column=5).value or "").strip()
+        kw = str(ws.cell(row=r, column=2).value or "").strip()
+        all_p = str(ws.cell(row=r, column=3).value or "").strip()
+        part_p = str(ws.cell(row=r, column=4).value or "").strip()
+        recert_p = str(ws.cell(row=r, column=5).value or "").strip()
         if not kw:
             continue
         rows.append({
@@ -150,11 +153,28 @@ def _parse_signoff_participants(blob: str) -> list:
             if first or last:
                 results.append((first, last, email))
         elif len(parts) == 2:
-            # first\tlast  (no email)
-            first = parts[0].strip()
-            last = parts[1].strip()
-            if first or last:
-                results.append((first, last, ""))
+            p0 = parts[0].strip()
+            p1 = parts[1].strip()
+            # case: "Full Name"\temail@...
+            if "@" in p1 and " " not in p1 and " " in p0:
+                name_toks = p0.split()
+                first = name_toks[0]
+                last = " ".join(name_toks[1:])
+                results.append((first, last, p1))
+            else:
+                # first\tlast  OR  first\t"last email@..."
+                first = p0
+                rest_toks = p1.split()
+                email_tok = ""
+                name_toks = []
+                for t in rest_toks:
+                    if "@" in t:
+                        email_tok = t
+                    else:
+                        name_toks.append(t)
+                last = " ".join(name_toks)
+                if first or last:
+                    results.append((first, last, email_tok))
         else:
             # space-separated: "First Last" or "First Last email@..."
             tokens = line.split()
@@ -182,11 +202,26 @@ SHEET2_HEADERS = ["Usertocourses", "course", "EnrolledOndate",
                   "CompletionDate", "Status"]
 
 
+DEFAULT_DOMAIN = "fast-rescue.com"
+
+
 def _make_login(email: str, first: str, last: str) -> str:
-    """Use email as login; if no email, construct a placeholder."""
+    """Use email as login.  Fallback rules:
+    - no email → firstname.lastname@fast-rescue.com
+    - only one name → name@fast-rescue.com (no dot)
+    - email present but missing domain → append @fast-rescue.com
+    """
     if email:
+        email = email.strip()
+        if "@" not in email:
+            return f"{email}@{DEFAULT_DOMAIN}"
+        if email.endswith("@"):
+            return f"{email}{DEFAULT_DOMAIN}"
         return email
-    return f"{first.lower()}.{last.lower()}@placeholder.com" if first and last else ""
+    parts = [p.lower().strip() for p in (first, last) if p and p.strip()]
+    if parts:
+        return ".".join(parts) + f"@{DEFAULT_DOMAIN}"
+    return ""
 
 
 def build_signoff(rec, mapping, out_dir):
@@ -258,7 +293,7 @@ def build_signoff(rec, mapping, out_dir):
         c.font = hdr_font
     for ri, (first, last, email, tlms) in enumerate(rows, 2):
         login = _make_login(email, first, last)
-        vals = [login, first, last, email, company_field, instructor,
+        vals = [login, first, last, login, company_field, instructor,
                 "fastrescue", "", tlms]
         for ci, v in enumerate(vals, 1):
             c = ws1.cell(row=ri, column=ci, value=v)
@@ -336,7 +371,8 @@ def read_signoff_export(xlsx_path):
 def main():
     ap = argparse.ArgumentParser(description="Build TLMS sign-off sheets from an Excel export.")
     ap.add_argument("export", help="Path to the sign-off export (.xlsx)")
-    ap.add_argument("mapping", help="Path to the mapping workbook (with 'List - Sign off sheets' tab)")
+    ap.add_argument("mapping", nargs="?", default=DEFAULT_MAPPING,
+                    help="Path to the mapping workbook (default: mapping/Signoff_Mapping.xlsx)")
     ap.add_argument("--out", default="signoff_sheets", help="Output folder")
     args = ap.parse_args()
 

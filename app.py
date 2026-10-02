@@ -1,16 +1,11 @@
 """
-Streamlit web UI for the course roster builder.
+Streamlit web UI for F.A.S.T. Rescue course tools.
+
+Tab 1: Course Roster Builder  - Excel export -> Word rosters
+Tab 2: Sign-Off Sheet Generator - Excel export -> TLMS sign-off Excel sheets
 
 Run locally:   streamlit run app.py
-Deploy free:   push this repo to GitHub, then deploy at https://share.streamlit.io
-
-Repo must contain:
-    app.py
-    build_rosters.py
-    requirements.txt
-    templates/    <- blank template .docx files
-    assets/logo.png
-    .streamlit/config.toml
+Deploy free:   push repo to GitHub, deploy at https://share.streamlit.io
 """
 
 import base64
@@ -21,62 +16,62 @@ import zipfile
 
 import streamlit as st
 import build_rosters as br
+import build_signoff as bs
 
 TEMPLATE_DIR = "templates"
+MAPPING_PATH = bs.DEFAULT_MAPPING
 LOGO_PATH = "assets/logo.png"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-st.set_page_config(page_title="F.A.S.T. Rescue — Roster Builder",
-                   page_icon="🚑", layout="centered")
+st.set_page_config(page_title="F.A.S.T. Rescue - Training Tools",
+                   page_icon="\U0001F691", layout="centered")
 
-# --------------------------------------------------------------------------- #
-# Styling
-# --------------------------------------------------------------------------- #
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', system-ui, sans-serif; }
-.block-container { padding-top: 2rem; max-width: 820px; }
+.block-container { padding-top: 1.5rem; max-width: 860px; }
 #MainMenu, footer { visibility: hidden; }
-
-.app-header {
-    display: flex; align-items: center; gap: 18px;
-    background: linear-gradient(135deg, #2b2b2b 0%, #4a4a4a 100%);
-    border-radius: 16px; padding: 22px 26px; margin-bottom: 8px;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+.brand-bar {
+    display: flex; align-items: center; gap: 16px;
+    background: linear-gradient(135deg, #1e1e1e 0%, #3a3a3a 100%);
+    border-radius: 14px; padding: 18px 22px; margin-bottom: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.10);
 }
-.app-header img { width: 64px; height: 64px; border-radius: 50%; background:#fff; padding:3px; }
-.app-header .title { color: #fff; font-size: 1.55rem; font-weight: 700; line-height: 1.1; }
-.app-header .subtitle { color: #f2b8b4; font-size: 0.95rem; font-weight: 500; margin-top: 2px; }
-.app-header .accent { color: #E03127; }
-
-.hint { color:#6b7280; font-size:0.9rem; margin: 2px 0 18px; }
-
+.brand-bar img { width: 54px; height: 54px; border-radius: 50%; background:#fff; padding:2px; }
+.brand-bar .t { color: #fff; font-size: 1.4rem; font-weight: 700; }
+.brand-bar .s { color: #ccc; font-size: 0.85rem; margin-top: 2px; }
+.section-head {
+    font-size: 1.15rem; font-weight: 700; color: #1a1a1a;
+    margin: 20px 0 4px; padding-bottom: 6px;
+    border-bottom: 3px solid #E03127; display: inline-block;
+}
+.hint { color:#6b7280; font-size:0.88rem; margin: 0 0 16px; }
 div[data-testid="stFileUploader"] {
-    border: 2px dashed #d6431f55; border-radius: 14px;
-    padding: 10px 14px; background: #fff7f6;
+    border: 2px dashed #d6431f44; border-radius: 12px;
+    padding: 8px 12px; background: #fff8f7;
 }
 .stButton > button, .stDownloadButton > button {
-    border-radius: 10px; font-weight: 600; padding: 0.5rem 1.1rem;
+    border-radius: 10px; font-weight: 600; padding: 0.45rem 1rem;
 }
-.stDownloadButton > button { border: 1px solid #E0312733; }
-
-.result-card {
-    border: 1px solid #ececec; border-left: 5px solid #E03127;
-    border-radius: 12px; padding: 14px 18px; margin-bottom: 18px;
-    background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+.stDownloadButton > button { border: 1px solid #E0312722; }
+.card {
+    border: 1px solid #e8e8e8; border-left: 4px solid #E03127;
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 14px;
+    background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.03);
 }
-.foot { color:#9aa0a6; font-size:0.8rem; text-align:center; margin-top:28px; }
+.card.skip { border-left-color: #d4a017; }
+.foot { color:#9aa0a6; font-size:0.78rem; text-align:center; margin-top:24px; }
+div[data-testid="stTabs"] button[data-baseweb="tab"] {
+    font-weight: 600; font-size: 0.95rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# --------------------------------------------------------------------------- #
-# Optional password gate
-#   Add to Streamlit Cloud Secrets to enable:  password = "your-password"
-# --------------------------------------------------------------------------- #
 _pw = st.secrets.get("password", None) if hasattr(st, "secrets") else None
 if _pw and st.session_state.get("authed") is not True:
-    st.markdown("#### 🔒 This tool is password protected")
+    st.markdown("#### \U0001F512 Password required")
     entered = st.text_input("Password", type="password", label_visibility="collapsed",
                             placeholder="Enter password")
     if entered == _pw:
@@ -86,216 +81,151 @@ if _pw and st.session_state.get("authed") is not True:
         st.error("Incorrect password.")
     st.stop()
 
-# --------------------------------------------------------------------------- #
-# Header
-# --------------------------------------------------------------------------- #
 logo_uri = ""
 if os.path.exists(LOGO_PATH):
-    logo_uri = "data:image/png;base64," + base64.b64encode(open(LOGO_PATH, "rb").read()).decode()
+    logo_uri = "data:image/png;base64," + base64.b64encode(
+        open(LOGO_PATH, "rb").read()).decode()
 
 st.markdown(f"""
-<div class="app-header">
+<div class="brand-bar">
   {'<img src="' + logo_uri + '"/>' if logo_uri else ''}
   <div>
-    <div class="title">Course Roster <span class="accent">Builder</span></div>
-    <div class="subtitle">F.A.S.T. Rescue Incorporated</div>
+    <div class="t">F.A.S.T. Rescue <span style="color:#E03127;">Training Tools</span></div>
+    <div class="s">Course Roster Builder &nbsp;&middot;&nbsp; Sign-Off Sheet Generator</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
-st.markdown('<div class="hint">Upload the Excel export and download print-ready Word rosters.</div>',
-            unsafe_allow_html=True)
 
-with st.expander("How it works"):
-    st.markdown(
-        "1. Export your courses to Excel.\n"
-        "2. Upload the `.xlsx` below.\n"
-        "3. Click **Generate rosters** and download the Word files.\n\n"
-        "The right template is chosen automatically from the course name "
-        "(First Aid In-Class / Blended / Recertification, Working at Heights, or a "
-        "General template for anything else). Cancelled courses are skipped unless you opt in."
-    )
+tab_roster, tab_signoff = st.tabs(["\U0001F4CB  Course Rosters", "\u2705  Sign-Off Sheets"])
 
-# --------------------------------------------------------------------------- #
-# Inputs
-# --------------------------------------------------------------------------- #
-uploaded = st.file_uploader("Excel export (.xlsx)", type=["xlsx"])
-c1, c2 = st.columns(2)
-keep_order = c1.toggle("Keep export order", help="Otherwise names are sorted A–Z.")
-include_cancelled = c2.toggle("Include cancelled courses")
 
-go = st.button("Generate rosters", type="primary", use_container_width=True,
-               disabled=uploaded is None)
-
-# --------------------------------------------------------------------------- #
-# Generate
-# --------------------------------------------------------------------------- #
-if uploaded and go:
-    template_map = br.load_template_map(TEMPLATE_DIR)
-    if not template_map:
-        st.error(f"No templates found in '{TEMPLATE_DIR}/'. Add the blank template "
-                 ".docx files there and redeploy.")
-        st.stop()
-
-    log, files = [], []
-    with st.spinner("Building rosters…"):
-        with tempfile.TemporaryDirectory() as tmp:
-            xlsx_path = os.path.join(tmp, "export.xlsx")
-            with open(xlsx_path, "wb") as f:
-                f.write(uploaded.getbuffer())
-            out_dir = os.path.join(tmp, "out")
-            os.makedirs(out_dir, exist_ok=True)
-
-            rows = br.read_export(xlsx_path)
-            suffixes = br._assign_suffixes(rows)
-            made = 0
-            for i, rec in enumerate(rows):
-                status, info, ctype, n = br.build_one(
-                    rec, template_map, out_dir,
-                    sort_alpha=not keep_order,
-                    include_cancelled=include_cancelled,
-                    fname_suffix=suffixes[i])
-                if status == "ok":
-                    made += 1
-                    with open(info, "rb") as fh:
-                        files.append((os.path.basename(info), fh.read()))
-                    log.append(("ok", os.path.basename(info), f"{ctype} · {n} participants"))
-                else:
-                    log.append(("skip", rec.get("customer") or "Unknown", info))
-
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for name, data in files:
-                z.writestr(name, data)
-
-    st.session_state["results"] = {
-        "files": files, "zip": zip_buf.getvalue(), "log": log,
-        "made": made, "skipped": sum(1 for s, *_ in log if s == "skip"),
-    }
-
-# --------------------------------------------------------------------------- #
-# Results (persisted so download clicks don't clear them)
-# --------------------------------------------------------------------------- #
-res = st.session_state.get("results")
-if res:
+def _render_results(res, dl_key, zip_name, mime, label):
     st.divider()
     m1, m2 = st.columns(2)
-    m1.metric("Rosters created", res["made"])
-    m2.metric("Skipped", res["skipped"])
-
+    m1.metric("Created", res["made"]); m2.metric("Skipped", res["skip"])
     if res["files"]:
-        st.download_button("⬇  Download all rosters (.zip)", res["zip"],
-                           file_name="rosters.zip", mime="application/zip",
-                           type="primary", use_container_width=True)
-
-    for status, title, detail in res["log"]:
-        if status == "ok":
-            st.markdown(f'<div class="result-card">✅ <b>{title}</b><br>'
-                        f'<span style="color:#6b7280">{detail}</span></div>',
-                        unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="result-card" style="border-left-color:#d9a300">'
-                        f'⏭️ <b>Skipped — {title}</b><br>'
-                        f'<span style="color:#6b7280">{detail}</span></div>',
-                        unsafe_allow_html=True)
-
+        st.download_button(f"\u2B07  Download all {label} (.zip)", res["zip"],
+                           file_name=zip_name, mime="application/zip",
+                           type="primary", use_container_width=True, key=dl_key)
+    for s, t, d in res["log"]:
+        cls = "card" if s == "ok" else "card skip"
+        icon = "\u2705" if s == "ok" else "\u23ED\uFE0F"
+        pre = "" if s == "ok" else "Skipped \u2014 "
+        st.markdown(f'<div class="{cls}">{icon} <b>{pre}{t}</b><br>'
+                    f'<span style="color:#6b7280">{d}</span></div>',
+                    unsafe_allow_html=True)
     if res["files"]:
         with st.expander("Download individual files"):
-            for i, (name, data) in enumerate(res["files"]):
-                st.download_button(name, data, file_name=name,
-                                   mime=DOCX_MIME, key=f"dl_{i}",
-                                   use_container_width=True)
+            for i, (nm, d) in enumerate(res["files"]):
+                st.download_button(nm, d, file_name=nm, mime=mime,
+                                   key=f"{dl_key}_{i}", use_container_width=True)
 
-st.markdown('<div class="foot">F.A.S.T. Rescue Incorporated · Course Roster Builder</div>',
+
+with tab_roster:
+    st.markdown('<div class="section-head">Course Roster Builder</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hint">Upload the Excel export \u2192 download print-ready Word rosters.</div>',
+                unsafe_allow_html=True)
+    with st.expander("\u2139\uFE0F  How it works"):
+        st.markdown(
+            "1. Export your courses to Excel.\n"
+            "2. Upload the `.xlsx` below.\n"
+            "3. Click **Generate** and download the Word files.\n\n"
+            "The right template is chosen automatically from the course name "
+            "(First Aid In-Class / Blended / Recertification, Working at Heights, "
+            "Lift Truck, EWP, or General for anything else). "
+            "Cancelled courses are skipped unless you opt in."
+        )
+    r_upload = st.file_uploader("Excel export", type=["xlsx"], key="r_upload")
+    rc1, rc2 = st.columns(2)
+    r_keep = rc1.toggle("Keep export order", help="Otherwise names are sorted A\u2013Z", key="r_keep")
+    r_cancelled = rc2.toggle("Include cancelled", key="r_cancelled")
+    r_go = st.button("Generate rosters", type="primary", use_container_width=True,
+                     disabled=r_upload is None, key="r_go")
+    if r_upload and r_go:
+        tmap = br.load_template_map(TEMPLATE_DIR)
+        if not tmap:
+            st.error(f"No templates in `{TEMPLATE_DIR}/`.")
+            st.stop()
+        r_log, r_files = [], []
+        with st.spinner("Building rosters \u2026"):
+            with tempfile.TemporaryDirectory() as tmp:
+                xp = os.path.join(tmp, "e.xlsx")
+                with open(xp, "wb") as f: f.write(r_upload.getbuffer())
+                od = os.path.join(tmp, "out"); os.makedirs(od)
+                rows = br.read_export(xp)
+                sfx = br._assign_suffixes(rows)
+                made = 0
+                for i, rec in enumerate(rows):
+                    s, info, ct, n = br.build_one(rec, tmap, od,
+                        sort_alpha=not r_keep, include_cancelled=r_cancelled,
+                        fname_suffix=sfx[i])
+                    if s == "ok":
+                        made += 1
+                        with open(info, "rb") as fh:
+                            r_files.append((os.path.basename(info), fh.read()))
+                        r_log.append(("ok", os.path.basename(info), f"{ct} \u00b7 {n} participants"))
+                    else:
+                        r_log.append(("skip", rec.get("customer") or "\u2014", info))
+            zbuf = io.BytesIO()
+            with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+                for nm, d in r_files: z.writestr(nm, d)
+        st.session_state["r_res"] = {
+            "files": r_files, "zip": zbuf.getvalue(), "log": r_log,
+            "made": made, "skip": sum(1 for s, *_ in r_log if s == "skip"),
+        }
+    res = st.session_state.get("r_res")
+    if res:
+        _render_results(res, "r_dl", "rosters.zip", DOCX_MIME, "rosters")
+
+
+with tab_signoff:
+    st.markdown('<div class="section-head">Sign-Off Sheet Generator</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hint">Upload the sign-off export \u2192 download TLMS sign-off Excel sheets.</div>',
+                unsafe_allow_html=True)
+    with st.expander("\u2139\uFE0F  How it works"):
+        st.markdown(
+            "1. Export sign-off data to Excel.\n"
+            "2. Upload the `.xlsx` below.\n"
+            "3. Click **Generate** \u2014 each row produces a `.xlsx` with Sheet1 (user import) "
+            "and Sheet2 (course completion).\n\n"
+            "Course names are mapped to TLMS course codes using the bundled mapping table. "
+            "To update the mapping, edit `mapping/Signoff_Mapping.xlsx` in the repo and push."
+        )
+    so_upload = st.file_uploader("Sign-off export", type=["xlsx"], key="so_upload")
+    so_go = st.button("Generate sign-off sheets", type="primary", use_container_width=True,
+                      disabled=so_upload is None, key="so_go")
+    if so_upload and so_go:
+        if not os.path.exists(MAPPING_PATH):
+            st.error(f"Mapping file not found at `{MAPPING_PATH}`.")
+            st.stop()
+        mapping = bs.load_mapping(MAPPING_PATH)
+        so_log, so_files = [], []
+        with st.spinner("Building sign-off sheets \u2026"):
+            with tempfile.TemporaryDirectory() as tmp:
+                xp = os.path.join(tmp, "e.xlsx")
+                with open(xp, "wb") as f: f.write(so_upload.getbuffer())
+                od = os.path.join(tmp, "out"); os.makedirs(od)
+                rows = bs.read_signoff_export(xp)
+                made = 0
+                for rec in rows:
+                    s, info, n = bs.build_signoff(rec, mapping, od)
+                    if s == "ok":
+                        made += 1
+                        with open(info, "rb") as fh:
+                            so_files.append((os.path.basename(info), fh.read()))
+                        so_log.append(("ok", os.path.basename(info), f"{n} participants"))
+                    else:
+                        so_log.append(("skip", rec.get("customer") or "\u2014", info))
+            zbuf = io.BytesIO()
+            with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+                for nm, d in so_files: z.writestr(nm, d)
+        st.session_state["so_res"] = {
+            "files": so_files, "zip": zbuf.getvalue(), "log": so_log,
+            "made": made, "skip": sum(1 for s, *_ in so_log if s == "skip"),
+        }
+    sres = st.session_state.get("so_res")
+    if sres:
+        _render_results(sres, "so_dl", "signoff_sheets.zip", XLSX_MIME, "sign-off sheets")
+
+st.markdown('<div class="foot">F.A.S.T. Rescue Incorporated \u00b7 Training Tools</div>',
             unsafe_allow_html=True)
-
-
-# --------------------------------------------------------------------------- #
-# SIGN-OFF SHEET SECTION
-# --------------------------------------------------------------------------- #
-st.divider()
-st.markdown(f"""
-<div class="app-header" style="background: linear-gradient(135deg, #1a3a5c 0%, #2d5a8e 100%);">
-  {('<img src="' + logo_uri + '"/>' if logo_uri else '')}
-  <div>
-    <div class="title">Sign-Off Sheet <span style="color:#7fb3e0;">Generator</span></div>
-    <div class="subtitle" style="color:#b0d0f0;">F.A.S.T. Rescue Incorporated</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-st.markdown('<div class="hint">Upload the sign-off export and the mapping workbook to generate TLMS sign-off sheets.</div>',
-            unsafe_allow_html=True)
-
-so_col1, so_col2 = st.columns(2)
-so_export = so_col1.file_uploader("Sign-off export (.xlsx)", type=["xlsx"], key="so_export")
-so_mapping = so_col2.file_uploader("Mapping workbook (.xlsx)", type=["xlsx"], key="so_mapping",
-                                    help="Must contain a 'List - Sign off sheets' tab")
-
-so_go = st.button("Generate sign-off sheets", type="primary", use_container_width=True,
-                   disabled=not (so_export and so_mapping), key="so_go")
-
-if so_export and so_mapping and so_go:
-    import build_signoff as bs
-    with st.spinner("Building sign-off sheets…"):
-        with tempfile.TemporaryDirectory() as tmp:
-            exp_path = os.path.join(tmp, "export.xlsx")
-            map_path = os.path.join(tmp, "mapping.xlsx")
-            with open(exp_path, "wb") as f:
-                f.write(so_export.getbuffer())
-            with open(map_path, "wb") as f:
-                f.write(so_mapping.getbuffer())
-            so_out = os.path.join(tmp, "out")
-            os.makedirs(so_out, exist_ok=True)
-
-            mapping = bs.load_mapping(map_path)
-            rows = bs.read_signoff_export(exp_path)
-            so_log, so_files = [], []
-            so_made = 0
-            for rec in rows:
-                status, info, n = bs.build_signoff(rec, mapping, so_out)
-                if status == "ok":
-                    so_made += 1
-                    with open(info, "rb") as fh:
-                        so_files.append((os.path.basename(info), fh.read()))
-                    so_log.append(("ok", os.path.basename(info), f"{n} participants"))
-                else:
-                    so_log.append(("skip", rec.get("customer") or "Unknown", info))
-
-        so_zip = io.BytesIO()
-        with zipfile.ZipFile(so_zip, "w", zipfile.ZIP_DEFLATED) as z:
-            for name, data in so_files:
-                z.writestr(name, data)
-
-    st.session_state["so_results"] = {
-        "files": so_files, "zip": so_zip.getvalue(), "log": so_log,
-        "made": so_made, "skipped": sum(1 for s, *_ in so_log if s == "skip"),
-    }
-
-so_res = st.session_state.get("so_results")
-if so_res:
-    st.divider()
-    m1, m2 = st.columns(2)
-    m1.metric("Sign-off sheets created", so_res["made"])
-    m2.metric("Skipped", so_res["skipped"])
-
-    if so_res["files"]:
-        st.download_button("⬇  Download all sign-off sheets (.zip)", so_res["zip"],
-                           file_name="signoff_sheets.zip", mime="application/zip",
-                           type="primary", use_container_width=True, key="so_dl_all")
-
-    for status, title, detail in so_res["log"]:
-        if status == "ok":
-            st.markdown(f'<div class="result-card">✅ <b>{title}</b><br>'
-                        f'<span style="color:#6b7280">{detail}</span></div>',
-                        unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="result-card" style="border-left-color:#d9a300">'
-                        f'⏭️ <b>Skipped — {title}</b><br>'
-                        f'<span style="color:#6b7280">{detail}</span></div>',
-                        unsafe_allow_html=True)
-
-    if so_res["files"]:
-        with st.expander("Download individual files"):
-            for i, (name, data) in enumerate(so_res["files"]):
-                st.download_button(name, data, file_name=name,
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   key=f"so_dl_{i}", use_container_width=True)
