@@ -43,19 +43,33 @@ def load_mapping(mapping_path: str) -> list:
     if not target:
         sys.exit(f"No 'Sign off sheets' tab found in {mapping_path}")
     ws = wb[target]
+    # find columns by header name (handles shifted layouts)
+    col_map = {}
+    for c in range(1, ws.max_column + 1):
+        h = str(ws.cell(row=1, column=c).value or "").strip().lower()
+        if "keyword" in h:
+            col_map["kw"] = c
+        elif "all participant" in h:
+            col_map["all"] = c
+        elif "participant name" in h:
+            col_map["part"] = c
+        elif "recertification" in h:
+            col_map["recert"] = c
+    if "kw" not in col_map:
+        sys.exit(f"No 'Keywords' column found in {target}")
     rows = []
     for r in range(2, ws.max_row + 1):
-        kw = str(ws.cell(row=r, column=2).value or "").strip()
-        all_p = str(ws.cell(row=r, column=3).value or "").strip()
-        part_p = str(ws.cell(row=r, column=4).value or "").strip()
-        recert_p = str(ws.cell(row=r, column=5).value or "").strip()
+        kw = str(ws.cell(row=r, column=col_map["kw"]).value or "").strip()
+        all_p = str(ws.cell(row=r, column=col_map.get("all", 99)).value or "").strip()
+        part_p = str(ws.cell(row=r, column=col_map.get("part", 99)).value or "").strip()
+        recert_p = str(ws.cell(row=r, column=col_map.get("recert", 99)).value or "").strip()
         if not kw:
             continue
         rows.append({
             "keyword": kw,
-            "all": all_p,          # single course for everyone
-            "part_course": part_p, # course for Participant Names col
-            "recert_course": recert_p,  # course for Recertification col
+            "all": all_p,
+            "part_course": part_p,
+            "recert_course": recert_p,
         })
     # sort by keyword length descending so longer/more-specific keywords match first
     rows.sort(key=lambda r: len(r["keyword"]), reverse=True)
@@ -63,10 +77,17 @@ def load_mapping(mapping_path: str) -> list:
 
 
 def match_mapping(course_name: str, mapping: list) -> dict | None:
-    """Find the first mapping entry whose keyword appears in the course name."""
+    """Find the first mapping entry whose keyword appears in the course name.
+    Strips parenthetical qualifiers like (Standard) before matching so
+    'Intermediate (Standard) First Aid' matches 'Intermediate First Aid'."""
     low = course_name.lower()
+    # also try with parentheticals removed and extra spaces collapsed
+    low_stripped = re.sub(r"\s*\([^)]*\)\s*", " ", low)      # (Standard)
+    low_stripped = re.sub(r"\bin[- ]class\b\s*", "", low_stripped)  # In-Class
+    low_stripped = re.sub(r"\s+", " ", low_stripped).strip()
     for entry in mapping:
-        if entry["keyword"].lower() in low:
+        kw = entry["keyword"].lower()
+        if kw in low or kw in low_stripped:
             return entry
     return None
 
@@ -113,7 +134,12 @@ def extract_course_name(name_col: str) -> str:
         after = raw.split(" : ", 1)[1] if " : " in raw else raw
         after = re.sub(r"^\s*\d{8}\s+", "", after).strip()
     after = re.split(r"_x000D_|[\r\n]", after)[0].strip()
-    return re.sub(r"\s+", " ", after).strip()
+    after = re.sub(r"\s+", " ", after).strip()
+    # cut at "Training" to drop trailing city
+    m2 = re.search(r"\bTraining\b", after, flags=re.I)
+    if m2:
+        after = after[:m2.end()].strip()
+    return after
 
 
 def _as_dt(v):
@@ -242,7 +268,7 @@ def build_signoff(rec, mapping, out_dir):
 
     # enrolled/completion date = end date + 1 day
     enroll_dt = (end_dt or start_dt) + timedelta(days=1)
-    enroll_str = enroll_dt.strftime("%Y-%m-%d 00:00:00")
+    enroll_str = enroll_dt.strftime("%Y-%m-%d")
 
     # match mapping
     entry = match_mapping(course_name, mapping)
